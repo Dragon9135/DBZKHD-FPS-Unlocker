@@ -22,7 +22,7 @@ If you'd like, you can download the latest version of the Ultimate ASI Loader's 
 - The mod takes effect a few seconds after the game starts.
 - A huge thank you to Gantz79. If it weren't for the [Cheat Engine Table](https://www.nexusmods.com/dragonballzkakarot/mods/527) he created, I wouldn't have been able to make this mod.
 - I compiled it using the MinGW-w64 library.
-- I used commands `x86_64-w64-mingw32-windres Version.rc -O coff -o Version.res` and `x86_64-w64-mingw32-g++ -shared -o "FPS Unlocker for DBZK (HD).asi" "FPS_Unlocker_for_DBZK__HD_.cpp" Version.res -O2 -static -static-libgcc -static-libstdc++` to compile the ASI file.
+- I used commands `x86_64-w64-mingw32-windres Version.rc -O coff -o Version.res` and `x86_64-w64-mingw32-g++ -shared -o "FPS Unlocker for DBZK (HD).asi" "Main.cpp" Version.res -O2 -static -static-libgcc -static-libstdc++` to compile the ASI file.
 - AI assistance was used for some functions and bug fixes.
 
 ## Contributors
