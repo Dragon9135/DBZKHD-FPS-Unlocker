@@ -5,7 +5,7 @@ A huge thank you to **Gantz79**. If it weren't for the Cheat Engine Table he cre
 
 https://www.nexusmods.com/profile/Gantz79
 
-For the mod to work, you need to place the mod file in the **`DRAGON BALL Z KAKAROT\DLC\Remaster\AT\Binaries\Win64`** folder of your game using **Ultimate ASI Loader**.
+You need to place the mod file, along with the **Ultimate ASI Loader .DLL** file, in the `DRAGON BALL Z KAKAROT\DLC\Remaster\AT\Binaries\Win64` folder of your game.
 
 You can download the latest version of **Ultimate ASI Loader** here:
 
