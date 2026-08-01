@@ -1,4 +1,4 @@
-name: Dragon Ball Z Kakarot (HD) FPS Unlocker Build
+name: Build DBZK (HD) FPS Unlocker
 
 on:
   push:
@@ -17,22 +17,22 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup MinGW-w64
-      uses: egor-tensin/setup-mingw@v2
+    - name: Setup MSYS2 and MinGW-w64
+      uses: msys2/setup-msys2@v2
       with:
-        platform: x64
-        version: latest
-        
-    - name: Verify MinGW installation
-      run: |
-        g++ --version
-        windres --version
-        
+        msystem: mingw64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-windres
+          
     - name: Compile Resource file
+      shell: msys2 {0}
       run: |
         windres src/Version.rc -O coff -o Version.o
         
     - name: Compile FPS Unlocker
+      shell: msys2 {0}
       run: |
         g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
         
