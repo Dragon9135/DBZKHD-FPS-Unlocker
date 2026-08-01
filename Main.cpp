@@ -1,6 +1,6 @@
 /*
  * ===================================================================
- *  Dragon Ball Z: Kakarot (HD) - FPS Unlocker & ASI Plugin
+ *  Dragon Ball Z: Kakarot (HD) - FPS Unlocker & ASI Mod
  *  Game       : AT-Win64-Shipping.exe (HD 1.40) (Unreal Engine 4.27)
  *  Version    : 1.1.0.0
  *  Authors    : Talha2003 & Gantz79
@@ -26,10 +26,8 @@
 #include <vector>
 #include <cstdint>
 
-// ----------------------------- CONFIGURATION -----------------------------
 constexpr DWORD MAX_WAIT_TIME_MS  = 180000;
 constexpr DWORD POLL_INTERVAL_MS  = 500;
-// -------------------------------------------------------------------------
 
 static void PatchMemory(uintptr_t address, const std::vector<uint8_t>& patch) {
     DWORD oldProtect;
