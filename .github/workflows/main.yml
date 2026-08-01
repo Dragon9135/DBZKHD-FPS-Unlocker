@@ -34,7 +34,7 @@ jobs:
     - name: Compile FPS Unlocker
       shell: msys2 {0}
       run: |
-        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/FPSUnlocker.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
