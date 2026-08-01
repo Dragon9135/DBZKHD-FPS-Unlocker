@@ -15,7 +15,7 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       
     - name: Setup MSYS2 and MinGW-w64
       uses: msys2/setup-msys2@v2
@@ -39,7 +39,7 @@ jobs:
         g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: FPS-Unlocker-DBZK-HD
         path: FPS Unlocker for DBZK (HD).asi
