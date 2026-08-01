@@ -15,7 +15,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM 2. Compile and link the main code
 echo [2/2] Compiling: Main.cpp + Version.o
-g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" Main.cpp Version.o -lpsapi -luser32 -static -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: Main code compilation failed!
     pause
