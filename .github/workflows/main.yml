@@ -1,4 +1,4 @@
-name: Build DBZK (HD) FPS Unlocker
+name: Build FPS Unlocker
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
         update: true
         install: >-
           mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-windres
+          mingw-w64-x86_64-binutils
           
     - name: Compile Resource file
       shell: msys2 {0}
@@ -34,7 +34,7 @@ jobs:
     - name: Compile FPS Unlocker
       shell: msys2 {0}
       run: |
-        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/FPSUnlocker.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -45,7 +45,7 @@ jobs:
         
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: FPS Unlocker for DBZK (HD).asi
         draft: false
