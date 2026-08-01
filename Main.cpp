@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 static float g_ManualFPSOverride = 0.0f;
 
@@ -160,52 +159,11 @@ static float DetectTargetFPS(HWND hwnd)
     return kFallback;
 }
 
-static bool GetTextSection(uintptr_t moduleBase, size_t moduleSize, BYTE** outStart, size_t* outSize)
+static bool CheckBytesAtAddress(const void* address, const BYTE* expected, size_t len)
 {
-    if (moduleSize < sizeof(IMAGE_DOS_HEADER))
+    if (!IsRangeCommitted(address, len))
         return false;
-
-    auto dos = reinterpret_cast<PIMAGE_DOS_HEADER>(moduleBase);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-        return false;
-
-    if (static_cast<size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS) > moduleSize)
-        return false;
-
-    auto nt = reinterpret_cast<PIMAGE_NT_HEADERS>(moduleBase + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE)
-        return false;
-
-    PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
-    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i)
-    {
-        if (memcmp(section[i].Name, ".text", 5) == 0)
-        {
-            uintptr_t start = moduleBase + section[i].VirtualAddress;
-            size_t size = section[i].Misc.VirtualSize;
-            if (section[i].VirtualAddress + size > moduleSize)
-                return false;
-
-            *outStart = reinterpret_cast<BYTE*>(start);
-            *outSize  = size;
-            return true;
-        }
-    }
-    return false;
-}
-
-static std::vector<BYTE*> FindAllPatterns(BYTE* base, size_t regionSize, const BYTE* pattern, size_t patLen)
-{
-    std::vector<BYTE*> hits;
-    if (regionSize < patLen)
-        return hits;
-
-    for (size_t i = 0; i + patLen <= regionSize; ++i)
-    {
-        if (memcmp(base + i, pattern, patLen) == 0)
-            hits.push_back(base + i);
-    }
-    return hits;
+    return memcmp(address, expected, len) == 0;
 }
 
 static bool SafePatchBytes(void* address, const BYTE* newBytes, size_t len)
@@ -290,38 +248,23 @@ static DWORD WINAPI MainThread(LPVOID)
     uintptr_t moduleBase = reinterpret_cast<uintptr_t>(hModule);
     size_t moduleSize    = modInfo.SizeOfImage;
 
-    BYTE* textStart = nullptr;
-    size_t textSize = 0;
-    if (!GetTextSection(moduleBase, moduleSize, &textStart, &textSize))
+    void* patchAddress = reinterpret_cast<void*>(moduleBase + EXPECTED_TEXT_OFFSET);
+
+    if (EXPECTED_TEXT_OFFSET + AOB_LEN > moduleSize)
     {
-        LogDebug(".text section not found - aborting.\n");
+        LogDebug("Target code offset falls outside the module image - aborting.\n");
         return 1;
     }
 
-    std::vector<BYTE*> hits = FindAllPatterns(textStart, textSize, AOB_PATTERN, AOB_LEN);
-    if (hits.empty())
+    if (!CheckBytesAtAddress(patchAddress, AOB_PATTERN, AOB_LEN))
     {
-        LogDebug("AOB pattern not found in .text - EXE build likely doesn't match the CT file. Aborting.\n");
+        LogDebug("Byte assert failed at the expected offset - this game build doesn't "
+                 "match the CT file. Aborting without touching memory.\n");
         return 1;
-    }
-
-    BYTE* best = hits[0];
-    uintptr_t bestDelta = static_cast<uintptr_t>(-1);
-    for (BYTE* hit : hits)
-    {
-        uintptr_t offset = reinterpret_cast<uintptr_t>(hit) - moduleBase;
-        uintptr_t delta = (offset > EXPECTED_TEXT_OFFSET)
-            ? (offset - EXPECTED_TEXT_OFFSET)
-            : (EXPECTED_TEXT_OFFSET - offset);
-        if (delta < bestDelta)
-        {
-            bestDelta = delta;
-            best = hit;
-        }
     }
 
     static const BYTE NOP5[AOB_LEN] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
-    if (!SafePatchBytes(best, NOP5, AOB_LEN))
+    if (!SafePatchBytes(patchAddress, NOP5, AOB_LEN))
     {
         LogDebug("Failed to patch write-back instruction - aborting.\n");
         return 1;
