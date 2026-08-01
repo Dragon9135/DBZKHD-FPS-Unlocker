@@ -29,12 +29,14 @@ jobs:
     - name: Compile Resource file
       shell: msys2 {0}
       run: |
-        windres src/Version.rc -O coff -o Version.o
+        cd "$GITHUB_WORKSPACE"
+        windres Version.rc -O coff -o Version.o
         
     - name: Compile FPS Unlocker
       shell: msys2 {0}
       run: |
-        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" src/Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+        cd "$GITHUB_WORKSPACE"
+        g++ -shared -O2 -o "FPS Unlocker for DBZK (HD).asi" Main.cpp Version.o -lpsapi -static-libgcc -static-libstdc++ -DPSAPI_VERSION=1 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
