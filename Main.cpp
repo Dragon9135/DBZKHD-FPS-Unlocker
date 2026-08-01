@@ -14,13 +14,11 @@
 #include <cstdio>
 #include <cstring>
 
-static float g_ManualFPSOverride = 0.0f;
+static float g_ManualFPSOverride = 0.0f; 
 
 static const uintptr_t FPS_DATA_OFFSET = 0x0700C228;
-
 static const BYTE   AOB_PATTERN[] = { 0xF3, 0x0F, 0x11, 0x4F, 0x48 };
 static const size_t AOB_LEN       = sizeof(AOB_PATTERN);
-
 static const uintptr_t EXPECTED_TEXT_OFFSET = 0x2660EA8;
 
 static void LogDebug(const char* msg)
@@ -36,18 +34,15 @@ static bool IsRangeCommitted(const void* address, size_t size)
 {
     const BYTE* cur = reinterpret_cast<const BYTE*>(address);
     const BYTE* end = cur + size;
-
     while (cur < end)
     {
         MEMORY_BASIC_INFORMATION mbi{};
         if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0)
             return false;
-
         if (mbi.State != MEM_COMMIT)
             return false;
         if (mbi.Protect == PAGE_NOACCESS || (mbi.Protect & PAGE_GUARD))
             return false;
-
         const BYTE* regionEnd = reinterpret_cast<const BYTE*>(mbi.BaseAddress) + mbi.RegionSize;
         cur = regionEnd;
     }
@@ -63,30 +58,23 @@ struct FindWindowCtx
 static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam)
 {
     FindWindowCtx* ctx = reinterpret_cast<FindWindowCtx*>(lParam);
-
     DWORD windowPid = 0;
     GetWindowThreadProcessId(hwnd, &windowPid);
     if (windowPid != ctx->pid)
         return TRUE;
-
     if (!IsWindowVisible(hwnd))
         return TRUE;
-
     if (GetWindow(hwnd, GW_OWNER) != nullptr)
         return TRUE;
-
     if (GetWindowTextLengthW(hwnd) == 0)
         return TRUE;
-
     RECT rc{};
     if (!GetWindowRect(hwnd, &rc))
         return TRUE;
-
     int w = rc.right - rc.left;
     int h = rc.bottom - rc.top;
     if (w < 200 || h < 150)
         return TRUE;
-
     ctx->result = hwnd;
     return FALSE;
 }
@@ -102,13 +90,12 @@ static HWND WaitForGameReallyReady(DWORD pid, DWORD timeoutMs)
 {
     DWORD start = GetTickCount();
     HWND candidate = nullptr;
-
     while (GetTickCount() - start < timeoutMs)
     {
         candidate = FindProcessMainWindow(pid);
         if (candidate)
         {
-            Sleep(1000);
+            Sleep(2000); 
             if (IsWindow(candidate) && IsWindowVisible(candidate))
             {
                 HWND recheck = FindProcessMainWindow(pid);
@@ -117,7 +104,7 @@ static HWND WaitForGameReallyReady(DWORD pid, DWORD timeoutMs)
             }
             candidate = nullptr;
         }
-        Sleep(250);
+        Sleep(500);
     }
     return nullptr;
 }
@@ -131,11 +118,10 @@ static float DetectTargetFPS(HWND hwnd)
 
     POINT origin{ 0, 0 };
     HMONITOR hMon = hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY)
-                          : MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+                         : MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
 
     MONITORINFOEXW monInfo{};
     monInfo.cbSize = sizeof(monInfo);
-
     if (hMon && GetMonitorInfoW(hMon, &monInfo))
     {
         DEVMODEW dm{};
@@ -170,13 +156,10 @@ static bool SafePatchBytes(void* address, const BYTE* newBytes, size_t len)
 {
     if (!IsRangeCommitted(address, len))
         return false;
-
     DWORD oldProtect;
     if (!VirtualProtect(address, len, PAGE_EXECUTE_READWRITE, &oldProtect))
         return false;
-
     memcpy(address, newBytes, len);
-
     DWORD dummy;
     VirtualProtect(address, len, oldProtect, &dummy);
     return true;
@@ -186,7 +169,6 @@ static bool SafeReadFloat(uintptr_t address, float* outValue)
 {
     if (!IsRangeCommitted(reinterpret_cast<void*>(address), sizeof(float)))
         return false;
-
     *outValue = *reinterpret_cast<float*>(address);
     return true;
 }
@@ -226,6 +208,7 @@ static DWORD WINAPI MainThread(LPVOID)
         if (!hModule)
             Sleep(250);
     }
+
     if (!hModule)
     {
         LogDebug("AT-Win64-Shipping.exe never appeared - giving up.\n");
@@ -240,6 +223,8 @@ static DWORD WINAPI MainThread(LPVOID)
         return 1;
     }
     LogDebug("Game window detected and stable - proceeding.\n");
+
+    Sleep(5000);
 
     MODULEINFO modInfo{};
     if (!GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(modInfo)))
@@ -263,14 +248,36 @@ static DWORD WINAPI MainThread(LPVOID)
         return 1;
     }
 
-    static const BYTE NOP5[AOB_LEN] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
-    if (!SafePatchBytes(patchAddress, NOP5, AOB_LEN))
+    void* cave = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!cave) {
+        LogDebug("Failed to allocate memory cave.\n");
+        return 1;
+    }
+
+    uintptr_t jmpBackAddr = reinterpret_cast<uintptr_t>(patchAddress) + AOB_LEN;
+    uintptr_t caveAddr = reinterpret_cast<uintptr_t>(cave);
+
+    BYTE caveCode[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
+    uintptr_t relAddr = jmpBackAddr - (caveAddr + 5);
+    memcpy(caveCode + 1, &relAddr, 4);
+    memcpy(cave, caveCode, 5);
+
+    BYTE jmpCode[] = { 0xE9, 0x00, 0x00, 0x00, 0x00 };
+    uintptr_t relJmp = caveAddr - (reinterpret_cast<uintptr_t>(patchAddress) + 5);
+    memcpy(jmpCode + 1, &relJmp, 4);
+
+    if (!SafePatchBytes(patchAddress, jmpCode, 5))
     {
         LogDebug("Failed to patch write-back instruction - aborting.\n");
         return 1;
     }
 
     float targetFPS = DetectTargetFPS(gameWindow);
+    
+    if (targetFPS > 144.0f) {
+        targetFPS = 144.0f;
+    }
+
     char logBuf[160];
     snprintf(logBuf, sizeof(logBuf), "Auto-detected target FPS: %.2f\n", targetFPS);
     LogDebug(logBuf);
@@ -282,6 +289,7 @@ static DWORD WINAPI MainThread(LPVOID)
         if (!wrote)
             Sleep(200);
     }
+
     if (!wrote)
     {
         LogDebug("Could not write target FPS value - verify FPS_DATA_OFFSET for this game build.\n");
@@ -289,6 +297,7 @@ static DWORD WINAPI MainThread(LPVOID)
     }
 
     Sleep(1500);
+
     float readBack = 0.0f;
     if (SafeReadFloat(moduleBase + FPS_DATA_OFFSET, &readBack))
     {
