@@ -8,148 +8,363 @@
  * ===================================================================
  */
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
-#endif
-#ifndef PSAPI_VERSION
-#define PSAPI_VERSION 1
-#endif
-
 #include <windows.h>
 #include <psapi.h>
-#include <vector>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
 
-constexpr DWORD MAX_WAIT_TIME_MS  = 180000;
-constexpr DWORD POLL_INTERVAL_MS  = 500;
+static float g_ManualFPSOverride = 0.0f;
 
-static void PatchMemory(uintptr_t address, const std::vector<uint8_t>& patch) {
-    DWORD oldProtect;
-    if (VirtualProtect(reinterpret_cast<LPVOID>(address), patch.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        memcpy(reinterpret_cast<LPVOID>(address), patch.data(), patch.size());
-        VirtualProtect(reinterpret_cast<LPVOID>(address), patch.size(), oldProtect, &oldProtect);
-    }
+static const uintptr_t FPS_DATA_OFFSET = 0x0700C228;
+
+static const BYTE   AOB_PATTERN[] = { 0xF3, 0x0F, 0x11, 0x4F, 0x48 };
+static const size_t AOB_LEN       = sizeof(AOB_PATTERN);
+
+static const uintptr_t EXPECTED_TEXT_OFFSET = 0x2660EA8;
+
+static void LogDebug(const char* msg)
+{
+#ifdef _DEBUG
+    OutputDebugStringA(msg);
+#else
+    (void)msg;
+#endif
 }
 
-static uintptr_t FindPattern(uintptr_t baseAddress, size_t size, const std::vector<int>& pattern) {
-    size_t patternSize = pattern.size();
-    uintptr_t endAddress = baseAddress + size - patternSize;
+static bool IsRangeCommitted(const void* address, size_t size)
+{
+    const BYTE* cur = reinterpret_cast<const BYTE*>(address);
+    const BYTE* end = cur + size;
 
-    MEMORY_BASIC_INFORMATION mbi;
-    uintptr_t i = baseAddress;
+    while (cur < end)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0)
+            return false;
 
-    while (i < endAddress) {
-        if (VirtualQuery(reinterpret_cast<LPCVOID>(i), &mbi, sizeof(mbi)) == 0) {
-            i += 0x1000;
-            continue;
-        }
+        if (mbi.State != MEM_COMMIT)
+            return false;
+        if (mbi.Protect == PAGE_NOACCESS || (mbi.Protect & PAGE_GUARD))
+            return false;
 
-        if (mbi.State != MEM_COMMIT ||
-            (mbi.Protect & PAGE_NOACCESS) ||
-            (mbi.Protect & PAGE_GUARD)) {
-            i = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-            continue;
-        }
+        const BYTE* regionEnd = reinterpret_cast<const BYTE*>(mbi.BaseAddress) + mbi.RegionSize;
+        cur = regionEnd;
+    }
+    return true;
+}
 
-        uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        if (regionEnd > endAddress) regionEnd = endAddress;
+struct FindWindowCtx
+{
+    DWORD pid;
+    HWND  result;
+};
 
-        uint8_t* scanBytes = reinterpret_cast<uint8_t*>(i);
-        size_t regionSize = regionEnd - i;
+static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam)
+{
+    FindWindowCtx* ctx = reinterpret_cast<FindWindowCtx*>(lParam);
 
-        for (size_t j = 0; j + patternSize <= regionSize; ++j) {
-            bool found = true;
-            for (size_t k = 0; k < patternSize; ++k) {
-                if (pattern[k] != -1 && scanBytes[j + k] != static_cast<uint8_t>(pattern[k])) {
-                    found = false;
-                    break;
-                }
+    DWORD windowPid = 0;
+    GetWindowThreadProcessId(hwnd, &windowPid);
+    if (windowPid != ctx->pid)
+        return TRUE;
+
+    if (!IsWindowVisible(hwnd))
+        return TRUE;
+
+    if (GetWindow(hwnd, GW_OWNER) != nullptr)
+        return TRUE;
+
+    if (GetWindowTextLengthW(hwnd) == 0)
+        return TRUE;
+
+    RECT rc{};
+    if (!GetWindowRect(hwnd, &rc))
+        return TRUE;
+
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w < 200 || h < 150)
+        return TRUE;
+
+    ctx->result = hwnd;
+    return FALSE;
+}
+
+static HWND FindProcessMainWindow(DWORD pid)
+{
+    FindWindowCtx ctx{ pid, nullptr };
+    EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.result;
+}
+
+static HWND WaitForGameReallyReady(DWORD pid, DWORD timeoutMs)
+{
+    DWORD start = GetTickCount();
+    HWND candidate = nullptr;
+
+    while (GetTickCount() - start < timeoutMs)
+    {
+        candidate = FindProcessMainWindow(pid);
+        if (candidate)
+        {
+            Sleep(1000);
+            if (IsWindow(candidate) && IsWindowVisible(candidate))
+            {
+                HWND recheck = FindProcessMainWindow(pid);
+                if (recheck == candidate)
+                    return candidate;
             }
-            if (found) return i + j;
+            candidate = nullptr;
         }
-
-        i = regionEnd;
+        Sleep(250);
     }
-    return 0;
+    return nullptr;
 }
 
-static float GetMonitorRefreshRate() {
-    DEVMODEW devMode = {};
-    devMode.dmSize = sizeof(devMode);
-    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &devMode)) {
-        return static_cast<float>(devMode.dmDisplayFrequency);
-    }
-    return 60.0f;
-}
+static float DetectTargetFPS(HWND hwnd)
+{
+    if (g_ManualFPSOverride > 0.0f)
+        return g_ManualFPSOverride;
 
-static bool IsGameReady(uintptr_t baseAddress, size_t moduleSize, const std::vector<int>& pattern) {
-    HWND hWnd = FindWindowW(L"UnrealWindow", NULL);
-    if (!hWnd) return false;
-    return FindPattern(baseAddress, moduleSize, pattern) != 0;
-}
+    const float kFallback = 60.0f;
 
-static DWORD WINAPI MainThread(LPVOID hModule) {
-    (void)hModule;
+    POINT origin{ 0, 0 };
+    HMONITOR hMon = hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY)
+                          : MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
 
-    uintptr_t baseAddress = 0;
-    for (int i = 0; i < 60 && !baseAddress; ++i) {
-        baseAddress = reinterpret_cast<uintptr_t>(GetModuleHandleA("AT-Win64-Shipping.exe"));
-        if (!baseAddress) Sleep(500);
-    }
-    if (!baseAddress) return 0;
+    MONITORINFOEXW monInfo{};
+    monInfo.cbSize = sizeof(monInfo);
 
-    MODULEINFO modInfo = {};
-    if (!GetModuleInformation(GetCurrentProcess(), reinterpret_cast<HMODULE>(baseAddress), &modInfo, sizeof(modInfo))) {
-        return 0;
-    }
-    size_t moduleSize = modInfo.SizeOfImage;
-
-    std::vector<int> fpsPattern = { 0xF3, 0x0F, 0x11, 0x4F, -1 };
-
-    DWORD startTime = GetTickCount();
-    while (GetTickCount() - startTime < MAX_WAIT_TIME_MS) {
-        if (IsGameReady(baseAddress, moduleSize, fpsPattern)) break;
-        Sleep(POLL_INTERVAL_MS);
-    }
-
-    uintptr_t patchAddress = FindPattern(baseAddress, moduleSize, fpsPattern);
-    if (!patchAddress) {
-        patchAddress = baseAddress + 0x1A9E8F5;
-    }
-
-    float targetFPS = GetMonitorRefreshRate();
-
-    std::vector<uint8_t> nopPatch = { 0x90, 0x90, 0x90, 0x90, 0x90 };
-    PatchMemory(patchAddress, nopPatch);
-
-    uintptr_t fpsPointerAddress = baseAddress + 0x0700C228;
-    float* fpsValue = reinterpret_cast<float*>(fpsPointerAddress);
-
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(fpsValue, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
-        DWORD oldProtect;
-        if (VirtualProtect(fpsValue, sizeof(float), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-            *fpsValue = targetFPS;
-            VirtualProtect(fpsValue, sizeof(float), oldProtect, &oldProtect);
+    if (hMon && GetMonitorInfoW(hMon, &monInfo))
+    {
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(monInfo.szDevice, ENUM_CURRENT_SETTINGS, &dm))
+        {
+            if (dm.dmDisplayFrequency > 1)
+                return static_cast<float>(dm.dmDisplayFrequency);
         }
     }
 
+    DEVMODEW dmPrimary{};
+    dmPrimary.dmSize = sizeof(dmPrimary);
+    if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dmPrimary))
+    {
+        if (dmPrimary.dmDisplayFrequency > 1)
+            return static_cast<float>(dmPrimary.dmDisplayFrequency);
+    }
+
+    LogDebug("Could not detect monitor refresh rate, falling back to 60.\n");
+    return kFallback;
+}
+
+static bool GetTextSection(uintptr_t moduleBase, size_t moduleSize, BYTE** outStart, size_t* outSize)
+{
+    if (moduleSize < sizeof(IMAGE_DOS_HEADER))
+        return false;
+
+    auto dos = reinterpret_cast<PIMAGE_DOS_HEADER>(moduleBase);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+
+    if (static_cast<size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS) > moduleSize)
+        return false;
+
+    auto nt = reinterpret_cast<PIMAGE_NT_HEADERS>(moduleBase + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+
+    PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+    {
+        if (memcmp(section[i].Name, ".text", 5) == 0)
+        {
+            uintptr_t start = moduleBase + section[i].VirtualAddress;
+            size_t size = section[i].Misc.VirtualSize;
+            if (section[i].VirtualAddress + size > moduleSize)
+                return false;
+
+            *outStart = reinterpret_cast<BYTE*>(start);
+            *outSize  = size;
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::vector<BYTE*> FindAllPatterns(BYTE* base, size_t regionSize, const BYTE* pattern, size_t patLen)
+{
+    std::vector<BYTE*> hits;
+    if (regionSize < patLen)
+        return hits;
+
+    for (size_t i = 0; i + patLen <= regionSize; ++i)
+    {
+        if (memcmp(base + i, pattern, patLen) == 0)
+            hits.push_back(base + i);
+    }
+    return hits;
+}
+
+static bool SafePatchBytes(void* address, const BYTE* newBytes, size_t len)
+{
+    if (!IsRangeCommitted(address, len))
+        return false;
+
+    DWORD oldProtect;
+    if (!VirtualProtect(address, len, PAGE_EXECUTE_READWRITE, &oldProtect))
+        return false;
+
+    memcpy(address, newBytes, len);
+
+    DWORD dummy;
+    VirtualProtect(address, len, oldProtect, &dummy);
+    return true;
+}
+
+static bool SafeReadFloat(uintptr_t address, float* outValue)
+{
+    if (!IsRangeCommitted(reinterpret_cast<void*>(address), sizeof(float)))
+        return false;
+
+    *outValue = *reinterpret_cast<float*>(address);
+    return true;
+}
+
+static bool SafeWriteTargetFPS(uintptr_t moduleBase, size_t moduleSize, float targetFPS)
+{
+    if (FPS_DATA_OFFSET + sizeof(float) * 2 > moduleSize)
+    {
+        LogDebug("FPS data offset falls outside the module image - aborting write.\n");
+        return false;
+    }
+
+    void* primary   = reinterpret_cast<void*>(moduleBase + FPS_DATA_OFFSET);
+    void* secondary = reinterpret_cast<void*>(moduleBase + FPS_DATA_OFFSET + 0x4);
+
+    if (!IsRangeCommitted(primary, sizeof(float) * 2))
+        return false;
+
+    DWORD oldProtect;
+    if (!VirtualProtect(primary, sizeof(float) * 2, PAGE_EXECUTE_READWRITE, &oldProtect))
+        return false;
+
+    *reinterpret_cast<float*>(primary)   = targetFPS;
+    *reinterpret_cast<float*>(secondary) = targetFPS;
+
+    DWORD dummy;
+    VirtualProtect(primary, sizeof(float) * 2, oldProtect, &dummy);
+    return true;
+}
+
+static DWORD WINAPI MainThread(LPVOID)
+{
+    HMODULE hModule = nullptr;
+    for (int attempt = 0; attempt < 200 && !hModule; ++attempt)
+    {
+        hModule = GetModuleHandleA("AT-Win64-Shipping.exe");
+        if (!hModule)
+            Sleep(250);
+    }
+    if (!hModule)
+    {
+        LogDebug("AT-Win64-Shipping.exe never appeared - giving up.\n");
+        return 1;
+    }
+
+    DWORD pid = GetCurrentProcessId();
+    HWND gameWindow = WaitForGameReallyReady(pid, 90000);
+    if (!gameWindow)
+    {
+        LogDebug("Timed out waiting for a real game window - aborting to be safe.\n");
+        return 1;
+    }
+    LogDebug("Game window detected and stable - proceeding.\n");
+
+    MODULEINFO modInfo{};
+    if (!GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(modInfo)))
+        return 1;
+
+    uintptr_t moduleBase = reinterpret_cast<uintptr_t>(hModule);
+    size_t moduleSize    = modInfo.SizeOfImage;
+
+    BYTE* textStart = nullptr;
+    size_t textSize = 0;
+    if (!GetTextSection(moduleBase, moduleSize, &textStart, &textSize))
+    {
+        LogDebug(".text section not found - aborting.\n");
+        return 1;
+    }
+
+    std::vector<BYTE*> hits = FindAllPatterns(textStart, textSize, AOB_PATTERN, AOB_LEN);
+    if (hits.empty())
+    {
+        LogDebug("AOB pattern not found in .text - EXE build likely doesn't match the CT file. Aborting.\n");
+        return 1;
+    }
+
+    BYTE* best = hits[0];
+    uintptr_t bestDelta = static_cast<uintptr_t>(-1);
+    for (BYTE* hit : hits)
+    {
+        uintptr_t offset = reinterpret_cast<uintptr_t>(hit) - moduleBase;
+        uintptr_t delta = (offset > EXPECTED_TEXT_OFFSET)
+            ? (offset - EXPECTED_TEXT_OFFSET)
+            : (EXPECTED_TEXT_OFFSET - offset);
+        if (delta < bestDelta)
+        {
+            bestDelta = delta;
+            best = hit;
+        }
+    }
+
+    static const BYTE NOP5[AOB_LEN] = { 0x90, 0x90, 0x90, 0x90, 0x90 };
+    if (!SafePatchBytes(best, NOP5, AOB_LEN))
+    {
+        LogDebug("Failed to patch write-back instruction - aborting.\n");
+        return 1;
+    }
+
+    float targetFPS = DetectTargetFPS(gameWindow);
+    char logBuf[160];
+    snprintf(logBuf, sizeof(logBuf), "Auto-detected target FPS: %.2f\n", targetFPS);
+    LogDebug(logBuf);
+
+    bool wrote = false;
+    for (int attempt = 0; attempt < 5 && !wrote; ++attempt)
+    {
+        wrote = SafeWriteTargetFPS(moduleBase, moduleSize, targetFPS);
+        if (!wrote)
+            Sleep(200);
+    }
+    if (!wrote)
+    {
+        LogDebug("Could not write target FPS value - verify FPS_DATA_OFFSET for this game build.\n");
+        return 1;
+    }
+
+    Sleep(1500);
+    float readBack = 0.0f;
+    if (SafeReadFloat(moduleBase + FPS_DATA_OFFSET, &readBack))
+    {
+        if (readBack != targetFPS)
+        {
+            LogDebug("Value drifted after late init, re-applying once.\n");
+            SafeWriteTargetFPS(moduleBase, moduleSize, targetFPS);
+        }
+    }
+
     return 0;
 }
 
-extern "C" BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    (void)lpReserved;
-
-    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
+{
+    if (reason == DLL_PROCESS_ATTACH)
+    {
         DisableThreadLibraryCalls(hModule);
-        HANDLE hThread = CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
-        if (hThread) CloseHandle(hThread);
+        CreateThread(nullptr, 0, MainThread, nullptr, 0, nullptr);
     }
     return TRUE;
 }
