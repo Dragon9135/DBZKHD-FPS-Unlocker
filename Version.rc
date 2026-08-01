@@ -1,28 +1,33 @@
-1 VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+#include <winver.h>
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,1,0,0
+PRODUCTVERSION 1,1,0,0
 FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+FILEFLAGS VS_FF_DEBUG
+#else
 FILEFLAGS 0x0L
-FILEOS 0x40004L
-FILETYPE 0x2L
+#endif
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_DLL
 FILESUBTYPE 0x0L
 BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904b0"
-        BEGIN
-            VALUE "CompanyName", "Talha2003 and Gantz79"
-            VALUE "FileDescription", "Display Synchronization Module"
-            VALUE "FileVersion", "1.0.0.0"
-            VALUE "InternalName", "fps_sync"
-            VALUE "LegalCopyright", "Copyright (C) 2026"
-            VALUE "OriginalFilename", "FPS Unlocker for DBZK (HD).asi"
-            VALUE "ProductName", "FPS Unlocker for DBZK (HD)"
-            VALUE "ProductVersion", "1.0.0.0"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x409, 1200
-    END
+BLOCK "StringFileInfo"
+BEGIN
+BLOCK "040904B0"
+BEGIN
+VALUE "CompanyName", "Talha2003 & Gantz79"
+VALUE "FileDescription", "Frame Rate Unlocker for Dragon Ball Z: Kakarot (HD)"
+VALUE "FileVersion", "1.1.0.0"
+VALUE "InternalName", "FPS Unlocker for DBZK (HD)"
+VALUE "OriginalFilename", "FPS Unlocker for DBZK (HD).asi"
+VALUE "ProductName", "Dragon Ball Z: Kakarot HD FPS Unlocker"
+VALUE "ProductVersion", "1.1.0.0"
+VALUE "LegalCopyright", "Copyright (C) 2026 Talha2003 & Gantz79"
+END
+END
+BLOCK "VarFileInfo"
+BEGIN
+VALUE "Translation", 0x0409, 1200
+END
 END
