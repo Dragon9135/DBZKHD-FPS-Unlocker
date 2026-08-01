@@ -8,20 +8,8 @@
  * ===================================================================
  */
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#define NOCOMM
-#define NOCRYPT
-#define NOGDI
-#define NOKANJI
-#define NONLS
-#define NOSERVICE
-#define NOTAPE
-#define NOWINHELP
-
 #include <windows.h>
 #include <vector>
-#include <cstring>
 
 int GetMonitorRefreshRate() {
     DEVMODE devMode;
